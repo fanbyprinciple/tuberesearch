@@ -54,6 +54,18 @@ tuberesearch "EPUB reader Android Kotlin tutorial" --max 5
 - Claude Sonnet final rank: ~$0.01
 - 10-video run total: **≈ $0.02**
 
+## Use it from Claude Code (skill)
+
+A wrapper skill is registered at `~/.claude-work/skills/tuberesearch/SKILL.md`. Inside Claude Code:
+
+```
+research best react three fiber tutorials on youtube
+tuberesearch claude code workflow tips
+find me good talks on systems design from the last year
+```
+
+The skill calls this Python CLI as a Bash hook — it does not re-implement the logic. So one source of truth: this repo. Update here, the skill picks up changes immediately.
+
 ## When to add OAuth (later)
 
 Skip OAuth for v1. Add it when you want:
