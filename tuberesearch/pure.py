@@ -251,37 +251,63 @@ def _normalize_tool(name: str) -> str:
 def run_pure(
     task: str,
     *,
-    max_results: int = 10,
+    max_results: int = 6,
     recent_days: int | None = None,
-    workers: int = 4,
+    workers: int = 1,
     top_n: int = 5,
     transcript_chars: int = 12_000,
+    skip_no_transcript: bool = True,
 ) -> tuple[list[ScoredVideo], dict[str, ToolMention]]:
-    """End-to-end pure-Python pipeline. Returns ranked videos + tool dict keyed by normalized name."""
+    """Pure-Python pipeline with stealth fetch defaults.
+
+    workers=1 + 2-5 sec jitter inside fetch_transcript = sequential, not parallel.
+    Videos without a transcript are dropped from the final ranking by default.
+    Raises RuntimeError("ip_blocked") if YouTube blocks our IP mid-fetch.
+    """
     hits = search_videos(task, max_results=max_results, recent_days=recent_days)
     if not hits:
         return [], {}
 
     transcripts: dict[str, TranscriptResult] = {}
+    blocked = False
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         TimeElapsedColumn(),
         transient=True,
     ) as progress:
-        t_task = progress.add_task("fetching transcripts", total=len(hits))
-        with ThreadPoolExecutor(max_workers=workers) as ex:
-            futures = {ex.submit(fetch_transcript, h.video_id, max_chars=transcript_chars): h for h in hits}
-            for fut in as_completed(futures):
-                tr = fut.result()
-                transcripts[tr.video_id] = tr
+        t_task = progress.add_task("fetching transcripts (sequential, 2-5s jitter)", total=len(hits))
+        if workers <= 1:
+            for h in hits:
+                tr = fetch_transcript(h.video_id, max_chars=transcript_chars)
+                transcripts[h.video_id] = tr
                 progress.advance(t_task)
+                if tr.ip_blocked:
+                    blocked = True
+                    break
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                futures = {ex.submit(fetch_transcript, h.video_id, max_chars=transcript_chars): h for h in hits}
+                for fut in as_completed(futures):
+                    tr = fut.result()
+                    transcripts[tr.video_id] = tr
+                    progress.advance(t_task)
+                    if tr.ip_blocked:
+                        blocked = True
+
+    if blocked:
+        raise RuntimeError(
+            "ip_blocked: YouTube blocked our IP. Wait 30+ minutes before retrying. "
+            "Set WEBSHARE_USERNAME + WEBSHARE_PASSWORD for a proxy bypass, or run from a different network."
+        )
 
     scored: list[ScoredVideo] = []
     tool_index: dict[str, ToolMention] = {}
 
     for h in hits:
         tr = transcripts.get(h.video_id) or TranscriptResult(h.video_id, None, None, False, error="missing")
+        if skip_no_transcript and not tr.has_text:
+            continue
         blob = " ".join(filter(None, [h.title, h.description, tr.text or ""]))
         tools = extract_tools(blob)
         for raw in tools:

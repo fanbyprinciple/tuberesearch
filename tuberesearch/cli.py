@@ -207,9 +207,19 @@ def main(argv: list[str] | None = None) -> int:
         description="Search YouTube, fetch transcripts, summarize, rank.",
     )
     parser.add_argument("query", nargs="+", help="research topic / task description")
-    parser.add_argument("--max", type=int, default=10, help="max videos to fetch (default 10)")
+    parser.add_argument("--max", type=int, default=8, help="max videos to fetch (default 8)")
     parser.add_argument("--recent", type=int, default=None, help="only consider videos from last N days")
-    parser.add_argument("--workers", type=int, default=4, help="parallel transcript+summary workers")
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="parallel transcript fetch workers. default 1 (sequential — keeps YouTube happy). use 4+ at your own risk of getting IP blocked.",
+    )
+    parser.add_argument(
+        "--include-no-transcript",
+        action="store_true",
+        help="keep videos with no transcript in the output. default: skip them (transcript IS the value).",
+    )
     parser.add_argument(
         "--raw",
         action="store_true",
@@ -247,7 +257,21 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.raw:
         transcripts = _gather_transcripts(hits, max_workers=args.workers, quiet=True)
-        # truncate transcripts for chat-friendly payloads
+        # If YouTube blocked us, surface that loudly instead of returning partial JSON
+        if any(t.ip_blocked for t in transcripts.values()):
+            err = {
+                "task": task,
+                "videos": [],
+                "error": "ip_blocked",
+                "message": "YouTube blocked our IP. Wait 30+ minutes before retrying. Set WEBSHARE_USERNAME + WEBSHARE_PASSWORD for proxy bypass, or run from a different network.",
+            }
+            print(json.dumps(err, ensure_ascii=False, indent=2))
+            return 3
+        # Skip videos with no transcript unless --include-no-transcript was passed
+        if not args.include_no_transcript:
+            kept_ids = {vid for vid, t in transcripts.items() if t.has_text}
+            hits = [h for h in hits if h.video_id in kept_ids]
+            transcripts = {vid: t for vid, t in transcripts.items() if vid in kept_ids}
         for tr in transcripts.values():
             if tr.text and len(tr.text) > args.transcript_chars:
                 tr.text = tr.text[: args.transcript_chars] + "…"
