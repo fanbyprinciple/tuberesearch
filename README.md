@@ -1,18 +1,18 @@
 # tuberesearch
 
-YouTube research agent. Give it a task. It searches, fetches transcripts, summarizes each video with Claude Haiku, and ranks the best ones with Claude Sonnet. Returns winners + tools surfaced + skip list.
+YouTube research agent. Give it a task. It searches YouTube (no API key — scrapes the public results page), fetches video transcripts, summarizes each video with Claude Haiku, and ranks the best ones with Claude Sonnet. Returns winners + tools surfaced across videos + a skip list.
 
 ## How it works
 
 ```
-query --> YouTube Data API search (free, 10k units/day quota)
+query --> public YouTube results page scrape (no key, no browser)
        --> youtube-transcript-api (no auth, free)
        --> Claude Haiku 4.5 summarize each video (~$0.001/video)
        --> Claude Sonnet 4.6 rank winners + dedupe tools (~$0.01/run)
        --> rich terminal output
 ```
 
-No browser automation. No OAuth (yet). One CLI command.
+No browser automation. No Google API key. No OAuth. **Only an Anthropic API key is required.**
 
 ## Setup
 
@@ -22,21 +22,15 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
 cp .env.example .env
-# fill keys, then:
+# edit .env, paste your ANTHROPIC_API_KEY, then:
 set -a && source .env && set +a
 ```
 
-### Get a YouTube API key
-
-1. https://console.cloud.google.com → New project
-2. APIs & Services → Library → enable "YouTube Data API v3"
-3. APIs & Services → Credentials → Create Credentials → API key
-4. Restrict to YouTube Data API v3 (recommended)
-5. Paste into `.env` as `YOUTUBE_API_KEY`
-
 ### Get an Anthropic key
 
-https://console.anthropic.com → paste into `.env` as `ANTHROPIC_API_KEY`.
+https://console.anthropic.com → API Keys → Create → paste into `.env` as `ANTHROPIC_API_KEY`.
+
+That's the only key you need.
 
 ## Usage
 
@@ -49,7 +43,8 @@ tuberesearch "EPUB reader Android Kotlin tutorial" --max 5
 
 ## Cost (rough)
 
-- YouTube API: free up to 10k units/day. One run uses ~110 units (search.list + videos.list + N video fetches). ~90 runs/day on free tier.
+- Search: free (HTTP scrape, no API quota).
+- Transcripts: free (`youtube-transcript-api`, no auth).
 - Claude Haiku per-video summary: ~$0.001
 - Claude Sonnet final rank: ~$0.01
 - 10-video run total: **≈ $0.02**
@@ -66,14 +61,14 @@ find me good talks on systems design from the last year
 
 The skill calls this Python CLI as a Bash hook — it does not re-implement the logic. So one source of truth: this repo. Update here, the skill picks up changes immediately.
 
-## When to add OAuth (later)
+## How the search step works (no API key)
 
-Skip OAuth for v1. Add it when you want:
-- Personalized recs (your own watch history bias)
-- Filtering against your liked / saved videos
-- Avoiding videos from channels you've already dismissed
+1. Issues a plain `GET https://www.youtube.com/results?search_query=<query>` with a normal Chrome User-Agent.
+2. Regex-extracts the `ytInitialData` JSON blob YouTube embeds in the page.
+3. Walks the renderer tree for `videoRenderer` entries, pulls title / channel / view count / duration / publish-relative-time.
+4. Returns the same `VideoHit` shape the rest of the pipeline already consumed.
 
-For pure search + transcripts, public API key is enough.
+This is the same trick `yt-dlp` uses. Stable for years. If YouTube changes the HTML and the scrape breaks, swap in browser automation (`browser-use` + Playwright) — see `tuberesearch/search.py` for the contract to satisfy.
 
 ## Design notes
 
@@ -81,3 +76,9 @@ For pure search + transcripts, public API key is enough.
 - Transcripts truncated to 28k chars before summary (keeps Haiku prompts cheap).
 - Per-video summarize runs in parallel (`--workers`, default 4).
 - Final ranking is one batched Sonnet call across all summaries.
+
+## When you might want browser automation later
+
+If you ever want personalized YouTube results (Watch History bias, subscribed channels, age-gated content), swap `search.py` for a `browser-use`-driven Playwright session. Logged-in Chrome → same `VideoHit` output. Slower (~1-2 min/run) but personalized.
+
+For research-the-topic queries, the scrape path is faster, cheaper, and gets you the same relevance.

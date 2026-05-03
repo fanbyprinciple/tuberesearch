@@ -1,6 +1,6 @@
 # Quickstart
 
-Five-minute setup, both for standalone CLI use and as a Claude Code skill.
+Two-minute setup. One key required (Anthropic). YouTube needs no key.
 
 ## 1. Install the CLI
 
@@ -18,20 +18,12 @@ Verify:
 tuberesearch --help
 ```
 
-## 2. Get keys
-
-### YouTube Data API v3 (free)
-
-1. https://console.cloud.google.com → New Project (or pick existing)
-2. APIs & Services → Library → "YouTube Data API v3" → Enable
-3. APIs & Services → Credentials → Create Credentials → API key
-4. (Optional but recommended) Restrict to YouTube Data API v3
-5. Copy the key
-
-### Anthropic API key
+## 2. Get an Anthropic API key
 
 1. https://console.anthropic.com → API Keys → Create
 2. Copy the key
+
+That's it. No YouTube key, no Google account, no OAuth.
 
 ## 3. Configure `.env`
 
@@ -39,7 +31,6 @@ tuberesearch --help
 cd ~/codeplay/tuberesearch
 cp .env.example .env
 # edit .env, fill in:
-#   YOUTUBE_API_KEY=AIza...
 #   ANTHROPIC_API_KEY=sk-ant-...
 ```
 
@@ -49,14 +40,14 @@ cp .env.example .env
 cd ~/codeplay/tuberesearch
 source .venv/bin/activate
 set -a && source .env && set +a
-tuberesearch "best react three fiber tutorials"
+tuberesearch "claude code workflow tips"
 ```
 
 Common flags:
 
 | Flag | Effect |
 |---|---|
-| `--max N` | how many videos to fetch (default 10, max 25) |
+| `--max N` | how many videos to fetch (default 10) |
 | `--recent N` | only consider videos from last N days |
 | `--workers N` | parallel transcript+summary workers (default 4) |
 
@@ -81,14 +72,17 @@ summarize what youtube is saying about claude agent sdk
 
 Claude will pick up the `tuberesearch` skill automatically and run the same CLI under the hood. The skill is a wrapper — there is one source of truth (this repo). Update the Python here, the skill reflects it next run.
 
-## 6. Cost + quota
+## 6. Cost + limits
 
 | Service | What it costs |
 |---|---|
-| YouTube Data API | Free 10k units/day; one run = ~110 units → **~90 runs/day free** |
+| YouTube search | Free (no API, scrapes public results page) |
+| Transcripts | Free (`youtube-transcript-api`, no auth) |
 | Claude Haiku 4.5 (per-video summary) | ~$0.001 each |
 | Claude Sonnet 4.6 (final rank) | ~$0.01 per run |
 | **10-video run total** | **~$0.02** |
+
+No daily quota beyond Anthropic's account-level rate limit. Run it as often as you like.
 
 ## 7. What the output looks like
 
@@ -106,7 +100,8 @@ Then a dim "Skip" list of clickbait / off-task / ad-heavy videos.
 
 ## 8. Troubleshooting
 
-- **`error: YOUTUBE_API_KEY not set`** — `.env` not sourced. Run `set -a && source .env && set +a` first.
-- **HTTP 403 quota exceeded** — you've hit 10k units/day. Wait until midnight Pacific or upgrade billing.
+- **`error: ANTHROPIC_API_KEY not set`** — `.env` not sourced. Run `set -a && source .env && set +a` first.
+- **`Could not locate ytInitialData`** — YouTube changed their HTML. Open an issue. Workaround: temporarily switch to browser automation (`browser-use` + Playwright); the rest of the pipeline doesn't change.
 - **No transcripts on most videos** — niche topic with no captions; still ranks on title + description, but quality drops. Try a broader query.
 - **Stale results** — add `--recent 90` to bias to recent uploads.
+- **Anthropic rate-limit** — your account-level cap; wait a minute and retry.

@@ -5,7 +5,7 @@ description = "YouTube research agent: search, transcribe, summarize, rank for a
 requires-python = ">=3.11"
 dependencies = [
     "anthropic>=0.40.0",
-    "google-api-python-client>=2.140.0",
+    "requests>=2.31.0",
     "youtube-transcript-api>=0.6.2",
     "rich>=13.7.0",
     "python-dotenv>=1.0.0",

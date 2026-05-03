@@ -149,9 +149,6 @@ def main(argv: list[str] | None = None) -> int:
 
     task = " ".join(args.query)
 
-    if not os.environ.get("YOUTUBE_API_KEY"):
-        console.print("[red]error:[/red] YOUTUBE_API_KEY not set. Add it to .env")
-        return 2
     if not os.environ.get("ANTHROPIC_API_KEY"):
         console.print("[red]error:[/red] ANTHROPIC_API_KEY not set. Add it to .env")
         return 2
