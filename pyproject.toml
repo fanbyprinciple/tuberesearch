@@ -13,6 +13,8 @@ dependencies = [
 
 [project.scripts]
 tuberesearch = "tuberesearch.cli:main"
+tuberesearch-pure = "tuberesearch.pure:main"
+tuberesearch-telegram = "tuberesearch.telegram_bot:main"
 
 [build-system]
 requires = ["setuptools>=68.0"]
