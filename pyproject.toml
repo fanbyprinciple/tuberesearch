@@ -1,0 +1,22 @@
+[project]
+name = "tuberesearch"
+version = "0.1.0"
+description = "YouTube research agent: search, transcribe, summarize, rank for any topic"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=0.40.0",
+    "google-api-python-client>=2.140.0",
+    "youtube-transcript-api>=0.6.2",
+    "rich>=13.7.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.scripts]
+tuberesearch = "tuberesearch.cli:main"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["tuberesearch*"]
