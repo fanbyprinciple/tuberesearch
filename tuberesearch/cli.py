@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import asdict
 
 from dotenv import load_dotenv
 from rich.console import Console
@@ -14,7 +16,6 @@ from rich.table import Table
 from rich.text import Text
 
 from .search import VideoHit, search_videos
-from .summarize import VideoBrief, rank_videos, summarize_video
 from .transcript import TranscriptResult, fetch_transcript
 
 console = Console()
@@ -45,11 +46,75 @@ def _fmt_duration(iso: str | None) -> str:
     return out.strip() or "—"
 
 
+def _gather_transcripts(
+    hits: list[VideoHit],
+    *,
+    max_workers: int = 4,
+    quiet: bool = False,
+) -> dict[str, TranscriptResult]:
+    transcripts: dict[str, TranscriptResult] = {}
+    if quiet:
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futures = {ex.submit(fetch_transcript, h.video_id): h for h in hits}
+            for fut in as_completed(futures):
+                tr = fut.result()
+                transcripts[tr.video_id] = tr
+        return transcripts
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        TimeElapsedColumn(),
+        transient=True,
+    ) as progress:
+        t_task = progress.add_task("fetching transcripts", total=len(hits))
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futures = {ex.submit(fetch_transcript, h.video_id): h for h in hits}
+            for fut in as_completed(futures):
+                tr = fut.result()
+                transcripts[tr.video_id] = tr
+                progress.advance(t_task)
+    return transcripts
+
+
+def _emit_raw_json(
+    task: str,
+    hits: list[VideoHit],
+    transcripts: dict[str, TranscriptResult],
+) -> None:
+    """Print structured JSON: search hits + transcripts. No LLM."""
+    payload = {
+        "task": task,
+        "videos": [
+            {
+                **asdict(h),
+                "url": h.url,
+                "transcript": _serialize_transcript(transcripts.get(h.video_id)),
+            }
+            for h in hits
+        ],
+    }
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def _serialize_transcript(tr: TranscriptResult | None) -> dict | None:
+    if tr is None:
+        return None
+    return {
+        "language": tr.language,
+        "auto_generated": tr.auto_generated,
+        "error": tr.error,
+        "text": tr.text,
+    }
+
+
 def _gather_briefs(
     hits: list[VideoHit],
     *,
     max_workers: int = 4,
-) -> list[VideoBrief]:
+):
+    from .summarize import VideoBrief, summarize_video  # deferred so --raw mode has no anthropic dep
+
     transcripts: dict[str, TranscriptResult] = {}
     briefs: list[VideoBrief] = []
 
@@ -79,7 +144,7 @@ def _gather_briefs(
     return briefs
 
 
-def _print_results(task: str, hits: list[VideoHit], briefs: list[VideoBrief], rank: dict) -> None:
+def _print_results(task: str, hits: list[VideoHit], briefs, rank: dict) -> None:
     by_id = {h.video_id: h for h in hits}
     brief_by_id = {b.video_id: b for b in briefs}
 
@@ -145,22 +210,52 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max", type=int, default=10, help="max videos to fetch (default 10)")
     parser.add_argument("--recent", type=int, default=None, help="only consider videos from last N days")
     parser.add_argument("--workers", type=int, default=4, help="parallel transcript+summary workers")
+    parser.add_argument(
+        "--raw",
+        action="store_true",
+        help="emit JSON of search hits + transcripts on stdout. Skips LLM summary/rank. No ANTHROPIC_API_KEY required.",
+    )
+    parser.add_argument(
+        "--transcript-chars",
+        type=int,
+        default=12_000,
+        help="max transcript chars per video in --raw output (default 12000)",
+    )
     args = parser.parse_args(argv)
 
     task = " ".join(args.query)
 
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        console.print("[red]error:[/red] ANTHROPIC_API_KEY not set. Add it to .env")
+    # --raw needs no key
+    if not args.raw and not os.environ.get("ANTHROPIC_API_KEY"):
+        console.print(
+            "[red]error:[/red] ANTHROPIC_API_KEY not set. Add it to .env, "
+            "or run with --raw for JSON output (no LLM summary)."
+        )
         return 2
 
-    console.print(f"[bold]task:[/bold] {task}")
-    console.print(f"[dim]searching YouTube (max={args.max}, recent={args.recent or 'all'})...[/dim]")
+    if not args.raw:
+        console.print(f"[bold]task:[/bold] {task}")
+        console.print(f"[dim]searching YouTube (max={args.max}, recent={args.recent or 'all'})...[/dim]")
+
     hits = search_videos(task, max_results=args.max, recent_days=args.recent)
     if not hits:
-        console.print("[yellow]No videos found.[/yellow]")
+        if args.raw:
+            print(json.dumps({"task": task, "videos": []}, ensure_ascii=False, indent=2))
+        else:
+            console.print("[yellow]No videos found.[/yellow]")
         return 1
-    console.print(f"[green]{len(hits)}[/green] videos found")
 
+    if args.raw:
+        transcripts = _gather_transcripts(hits, max_workers=args.workers, quiet=True)
+        # truncate transcripts for chat-friendly payloads
+        for tr in transcripts.values():
+            if tr.text and len(tr.text) > args.transcript_chars:
+                tr.text = tr.text[: args.transcript_chars] + "…"
+        _emit_raw_json(task, hits, transcripts)
+        return 0
+
+    console.print(f"[green]{len(hits)}[/green] videos found")
+    from .summarize import rank_videos  # deferred import for --raw users
     briefs = _gather_briefs(hits, max_workers=args.workers)
     rank = rank_videos(task, hits, briefs)
     _print_results(task, hits, briefs, rank)

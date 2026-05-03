@@ -1,4 +1,4 @@
-"""Transcript fetcher with graceful fallback."""
+"""Transcript fetcher with graceful fallback (youtube-transcript-api v1.x)."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -24,41 +24,64 @@ class TranscriptResult:
         return self.text is not None and len(self.text.strip()) > 0
 
 
+_ENGLISH_CODES = ["en", "en-US", "en-GB", "en-IN", "en-AU"]
+
+
 def fetch_transcript(video_id: str, *, max_chars: int = 28_000) -> TranscriptResult:
     """Fetch English transcript if available. Truncate to max_chars to keep prompts cheap."""
+    api = YouTubeTranscriptApi()
     try:
-        listing = YouTubeTranscriptApi.list_transcripts(video_id)
-        transcript = None
+        transcript_list = api.list(video_id)
+        chosen = None
+        auto = False
+
+        # 1. Try manually-created English captions (best quality)
         try:
-            transcript = listing.find_manually_created_transcript(["en", "en-US", "en-GB"])
+            chosen = transcript_list.find_manually_created_transcript(_ENGLISH_CODES)
             auto = False
         except NoTranscriptFound:
+            pass
+
+        # 2. Try auto-generated English captions
+        if chosen is None:
             try:
-                transcript = listing.find_generated_transcript(["en", "en-US", "en-GB"])
+                chosen = transcript_list.find_generated_transcript(_ENGLISH_CODES)
                 auto = True
             except NoTranscriptFound:
-                # last resort: take any transcript and translate to English
-                first = next(iter(listing), None)
-                if first is None:
-                    return TranscriptResult(video_id, None, None, False, error="no transcripts")
-                if first.is_translatable:
-                    transcript = first.translate("en")
-                    auto = True
-                else:
-                    transcript = first
-                    auto = first.is_generated
+                pass
 
-        chunks = transcript.fetch()
-        text = " ".join(c["text"].replace("\n", " ").strip() for c in chunks if c.get("text"))
+        # 3. Fall back to first available, translate to English if possible
+        if chosen is None:
+            first = next(iter(transcript_list), None)
+            if first is None:
+                return TranscriptResult(video_id, None, None, False, error="no transcripts")
+            if first.is_translatable:
+                chosen = first.translate("en")
+                auto = True
+            else:
+                chosen = first
+                auto = first.is_generated
+
+        fetched = chosen.fetch()  # FetchedTranscript with .snippets
+        snippets = list(fetched)
+        text = " ".join(
+            (getattr(s, "text", "") or "").replace("\n", " ").strip()
+            for s in snippets
+        ).strip()
+
+        if not text:
+            return TranscriptResult(video_id, None, chosen.language_code, auto, error="empty transcript")
+
         if len(text) > max_chars:
             text = text[:max_chars] + "…"
+
         return TranscriptResult(
             video_id=video_id,
             text=text,
-            language=transcript.language_code,
+            language=chosen.language_code,
             auto_generated=auto,
         )
     except (TranscriptsDisabled, VideoUnavailable) as e:
         return TranscriptResult(video_id, None, None, False, error=type(e).__name__)
     except Exception as e:
-        return TranscriptResult(video_id, None, None, False, error=str(e)[:160])
+        return TranscriptResult(video_id, None, None, False, error=str(e)[:200])
